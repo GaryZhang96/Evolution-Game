@@ -1,52 +1,45 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Solaris Evolution</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+    <title>Solaris: Neon Survival</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #050505; font-family: 'Arial', sans-serif; user-select: none;}
+        body { margin: 0; overflow: hidden; background: #020202; font-family: 'Segoe UI', sans-serif; user-select: none; -webkit-user-select: none; }
         
-        /* UI 层 */
-        #hud { position: absolute; width: 100%; height: 100%; pointer-events: none; }
+        /* 全屏 UI 容器 */
+        #hud { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
         
-        /* 左上角信息 */
-        #info { position: absolute; top: 20px; left: 20px; color: #00ffff; text-shadow: 0 0 5px #00ffff; }
-        #info h1 { margin: 0; font-size: 24px; letter-spacing: 2px; }
-        #score { font-size: 18px; color: #ccc; margin-top: 5px; }
-
-        /* 底部技能栏 */
-        #skills { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); display: flex; gap: 20px; }
-        .skill-box { width: 60px; height: 60px; border: 2px solid #333; border-radius: 10px; background: rgba(0,0,0,0.5); position: relative; overflow: hidden; }
-        .skill-key { position: absolute; top: 5px; left: 5px; color: #fff; font-size: 12px; }
-        .skill-icon { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: #00ffff; font-weight: bold; }
-        #cd-overlay { position: absolute; bottom: 0; left: 0; width: 100%; height: 0%; background: rgba(0, 0, 0, 0.8); transition: height 0.1s linear; }
-
-        /* 右下角小地图 */
-        #minimap-container { position: absolute; bottom: 20px; right: 20px; width: 150px; height: 150px; background: rgba(0,0,0,0.3); border: 2px solid #444; border-radius: 50%; overflow: hidden; }
-        #minimap { width: 100%; height: 100%; }
-
-        /* 提示 */
-        #tips { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: rgba(255,255,255,0.5); font-size: 14px; text-align: center; }
+        /* 左上角状态 */
+        #status-bar { position: absolute; top: 20px; left: 20px; display: flex; flex-direction: column; gap: 5px; }
+        .bar-wrap { width: 200px; height: 10px; background: rgba(255,255,255,0.1); border-radius: 5px; overflow: hidden; }
+        .bar-fill { height: 100%; background: #00ffff; width: 0%; transition: width 0.2s; box-shadow: 0 0 10px #00ffff; }
+        #score-text { color: white; font-size: 20px; font-weight: bold; text-shadow: 0 0 8px #00ffff; }
+        
+        /* 技能图标 */
+        #skill-dash { position: absolute; bottom: 40px; right: 40px; width: 80px; height: 80px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; backdrop-filter: blur(5px); }
+        #skill-dash.active { border-color: #00ffff; box-shadow: 0 0 20px #00ffff inset; }
+        #skill-cd { position: absolute; bottom: 0; left: 0; width: 100%; height: 0%; background: rgba(0,0,0,0.6); border-radius: 50%; transition: height 0.1s linear; pointer-events: none; }
+        
+        /* 虚拟摇杆提示 */
+        #joystick-hint { position: absolute; bottom: 150px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.3); font-size: 14px; pointer-events: none; }
+        
+        /* 小地图 */
+        #minimap { position: absolute; bottom: 20px; left: 20px; width: 140px; height: 140px; background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 50%; backdrop-filter: blur(4px); }
     </style>
 </head>
 <body>
     <div id="hud">
-        <div id="info">
-            <h1>SOLARIS</h1>
-            <div id="score">质量: <span id="mass-val">0</span></div>
+        <div id="status-bar">
+            <div id="score-text">MASS: 10</div>
+            <div class="bar-wrap"><div class="bar-fill" id="exp-bar" style="width: 100%"></div></div>
         </div>
-        <div id="skills">
-            <div class="skill-box">
-                <div class="skill-key">SPACE</div>
-                <div class="skill-icon">DASH</div>
-                <div id="cd-overlay"></div>
-            </div>
+        <div id="skill-dash">
+            DASH
+            <div id="skill-cd"></div>
         </div>
-        <div id="minimap-container">
-            <canvas id="minimap" width="150" height="150"></canvas>
-        </div>
-        <div id="tips">按 WASD 或 鼠标拖动 移动<br>空格冲刺</div>
+        <div id="joystick-hint">PC: WASD / Mouse | Mobile: Touch Drag</div>
+        <canvas id="minimap" width="140" height="140"></canvas>
     </div>
 
     <script type="importmap">
@@ -60,200 +53,287 @@
         import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
         import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 
-        const socket = io();
-        
-        // --- 场景设置 ---
-        const scene = new THREE.Scene();
-        // 增加背景星空
-        const bgGeo = new THREE.BufferGeometry();
-        const bgCount = 1000;
-        const bgPos = new Float32Array(bgCount * 3);
-        for(let i=0; i<bgCount*3; i++) bgPos[i] = (Math.random()-0.5)*3000;
-        bgGeo.setAttribute('position', new THREE.BufferAttribute(bgPos, 3));
-        scene.add(new THREE.Points(bgGeo, new THREE.PointsMaterial({color: 0x444444, size: 2})));
+        // --- 1. 光效核心：创建发光纹理 ---
+        function createGlowTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64; canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            const grad = ctx.createRadialGradient(32,32,0, 32,32,32);
+            grad.addColorStop(0, 'rgba(255, 255, 255, 1)');
+            grad.addColorStop(0.4, 'rgba(255, 255, 255, 0.5)');
+            grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0,0,64,64);
+            return new THREE.CanvasTexture(canvas);
+        }
+        const glowTexture = createGlowTexture();
+        const glowMaterial = new THREE.SpriteMaterial({ 
+            map: glowTexture, 
+            color: 0x00ffff, 
+            transparent: true, 
+            opacity: 0.8,
+            blending: THREE.AdditiveBlending 
+        });
 
-        const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 1, 3000);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        // --- 场景初始化 ---
+        const socket = io();
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x050505, 0.0008); // 增加雾气增强景深
+        
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 1, 4000);
+        const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" }); // 关闭AA以提升性能，靠Bloom弥补
         renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // 限制DPI防止手机发烫
         document.body.appendChild(renderer.domElement);
 
-        // --- 后处理 (更强的光效) ---
+        // 强力 Bloom
         const composer = new EffectComposer(renderer);
         composer.addPass(new RenderPass(scene, camera));
-        const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 2.0, 0.5, 0.7); // 增强光晕
+        const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 2.5, 0.4, 0.6); // 强度2.5
         composer.addPass(bloom);
 
+        // 背景星星
+        const starsGeo = new THREE.BufferGeometry();
+        const starPos = [];
+        for(let i=0; i<2000; i++) {
+            starPos.push((Math.random()-0.5)*3000, (Math.random()-0.5)*1000, (Math.random()-0.5)*3000);
+        }
+        starsGeo.setAttribute('position', new THREE.Float32BufferAttribute(starPos, 3));
+        const stars = new THREE.Points(starsGeo, new THREE.PointsMaterial({color: 0x444444, size: 2, sizeAttenuation: false}));
+        scene.add(stars);
+
         // 太阳
-        const sun = new THREE.Mesh(new THREE.SphereGeometry(30, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffaa00 }));
-        scene.add(sun); scene.add(new THREE.PointLight(0xffaa00, 3, 1000));
+        const sun = new THREE.Mesh(new THREE.SphereGeometry(40, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffaa00 }));
+        const sunGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture, color: 0xff4400, blending: THREE.AdditiveBlending }));
+        sunGlow.scale.set(300, 300, 1);
+        sun.add(sunGlow);
+        scene.add(sun);
 
         // --- 游戏逻辑 ---
-        const meshes = {}; 
-        const algaeMeshes = {};
         const WORLD_SIZE = 2000;
-        let myData = null;
+        const myState = { 
+            id: null, x: 0, y: 0, size: 3, 
+            vx: 0, vy: 0, 
+            speed: 0.5, 
+            dashCdEnd: 0 
+        };
+        const entities = {}; // 存储所有 3D 对象
+        const algaeData = {}; // 存储藻类数据
 
-        // 小地图 Canvas
-        const mapCanvas = document.getElementById('minimap');
-        const mapCtx = mapCanvas.getContext('2d');
-
-        socket.on('state', ({ players, algaes, npcs }) => {
-            // 1. 同步藻类
-            Object.keys(algaeMeshes).forEach(k => { scene.remove(algaeMeshes[k]); delete algaeMeshes[k]; });
-            algaes.forEach(a => {
-                const m = new THREE.Mesh(new THREE.SphereGeometry(0.8), new THREE.MeshBasicMaterial({ color: 0x55ff55 }));
-                m.position.set(a.x, 0, a.y); scene.add(m); algaeMeshes[a.id] = m;
-            });
-
-            // 2. 同步实体 (玩家 + NPC)
-            const allEntities = { ...players, ...npcs.reduce((acc, n) => ({...acc, [n.id]: n}), {}) };
-
-            // 清理旧的
-            Object.keys(meshes).forEach(id => { if(!allEntities[id]) { scene.remove(meshes[id]); delete meshes[id]; } });
-
-            // 更新/创建
-            for(let id in allEntities) {
-                let p = allEntities[id];
-                let m = meshes[id];
+        // --- 创建/更新实体 ---
+        function updateEntity(id, data, isMe) {
+            let obj = entities[id];
+            
+            // 1. 创建新对象
+            if (!obj) {
+                obj = new THREE.Group();
                 
-                if(!m) {
-                    // 玩家是青色，NPC是随机色
-                    m = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), new THREE.MeshBasicMaterial({ color: p.color }));
-                    scene.add(m); meshes[id] = m;
+                // 核心球体
+                const coreGeo = new THREE.SphereGeometry(1, 16, 16);
+                const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff }); // 核心总是白的，最亮
+                const core = new THREE.Mesh(coreGeo, coreMat);
+                
+                // 外部光晕 (Sprite)
+                const glow = new THREE.Sprite(glowMaterial.clone());
+                glow.material.color.setHex(data.color || 0x00ffff);
+                glow.scale.set(4, 4, 1);
+                
+                obj.add(core);
+                obj.add(glow);
+                scene.add(obj);
+                entities[id] = obj;
+            }
+
+            // 2. 更新位置 (如果是自己，完全由客户端控制，不接受服务器位置)
+            if (!isMe) {
+                obj.position.lerp(new THREE.Vector3(data.x, 0, data.y), 0.2); // 他人插值
+            } else {
+                obj.position.set(myState.x, 0, myState.y); // 自己瞬移
+            }
+
+            // 3. 更新大小
+            const targetSize = data.size || 3;
+            obj.scale.setScalar(targetSize);
+            obj.children[1].scale.set(4, 4, 1); // 光晕保持比例
+            
+            // 4. 高级效果：根据速度拉伸 (Motion Stretch)
+            // ...暂略，保性能
+        }
+
+        // --- 网络同步 ---
+        socket.on('connect', () => { myState.id = socket.id; });
+        
+        // 初始化藻类
+        for(let i=0; i<200; i++) algaeData[i] = { x: (Math.random()-0.5)*WORLD_SIZE, y: (Math.random()-0.5)*WORLD_SIZE, active: true };
+        
+        // 批量创建藻类 Mesh (使用 InstancedMesh 优化性能)
+        const algaeGeo = new THREE.SphereGeometry(0.5, 8, 8);
+        const algaeMat = new THREE.MeshBasicMaterial({ color: 0x55ff55 });
+        const algaeMesh = new THREE.InstancedMesh(algaeGeo, algaeMat, 200);
+        scene.add(algaeMesh);
+        const dummy = new THREE.Object3D();
+
+        socket.on('state', (serverState) => {
+            // 更新他人
+            for (let id in serverState.players) {
+                if (id !== myState.id) updateEntity(id, serverState.players[id], false);
+            }
+            for (let npc of serverState.npcs) {
+                updateEntity(npc.id, npc, false);
+            }
+        });
+
+        socket.on('algaeEaten', (id, newPos) => {
+            if (algaeData[id]) {
+                algaeData[id].x = newPos.x;
+                algaeData[id].y = newPos.y;
+                // 特效：播放一个粒子爆炸 (暂略)
+            }
+        });
+
+        // --- 核心：客户端控制系统 (本地预测) ---
+        const keys = { w:0, a:0, s:0, d:0, space:0 };
+        const mouse = { x:0, y:0, down: false };
+
+        window.addEventListener('keydown', e => { if(e.key.toLowerCase() in keys || e.code === 'Space') keys[e.code === 'Space' ? 'space' : e.key.toLowerCase()] = 1; });
+        window.addEventListener('keyup', e => { if(e.key.toLowerCase() in keys || e.code === 'Space') keys[e.code === 'Space' ? 'space' : e.key.toLowerCase()] = 0; });
+        
+        window.addEventListener('mousedown', () => mouse.down = true);
+        window.addEventListener('mouseup', () => mouse.down = false);
+        window.addEventListener('mousemove', e => {
+            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        });
+        window.addEventListener('touchmove', e => {
+            e.preventDefault();
+            mouse.down = true;
+            mouse.x = (e.touches[0].clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(e.touches[0].clientY / window.innerHeight) * 2 + 1;
+        }, {passive:false});
+        window.addEventListener('touchend', () => mouse.down = false);
+
+        // 游戏主循环 (60FPS)
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // --- 1. 移动逻辑 (完全本地计算) ---
+            let dx = 0, dy = 0;
+            // 键盘
+            if (keys.w) dy -= 1; if (keys.s) dy += 1;
+            if (keys.a) dx -= 1; if (keys.d) dx += 1;
+            // 鼠标/触摸
+            if ((dx===0 && dy===0) && mouse.down) {
+                // 转换鼠标坐标为世界方向
+                const vec = new THREE.Vector3(mouse.x, mouse.y, 0.5).unproject(camera).sub(camera.position).normalize();
+                const dist = -camera.position.y / vec.y;
+                const target = camera.position.clone().add(vec.multiplyScalar(dist));
+                dx = target.x - myState.x;
+                dy = target.z - myState.y;
+            }
+
+            // 归一化并移动
+            const len = Math.hypot(dx, dy);
+            if (len > 0.1) {
+                // 基础速度随体型变慢
+                let speed = 4 * (5 / (myState.size + 2)); 
+                
+                // 冲刺逻辑
+                if (keys.space && Date.now() > myState.dashCdEnd) {
+                    speed *= 3;
+                    myState.dashCdEnd = Date.now() + 3000; // 3s CD
+                    // 冲刺视觉反馈
+                    document.getElementById('skill-dash').classList.add('active');
+                    setTimeout(()=>document.getElementById('skill-dash').classList.remove('active'), 200);
                 }
-                
-                // 平滑插值
-                m.position.lerp(new THREE.Vector3(p.x, 0, p.y), 0.3);
-                m.scale.setScalar(p.size);
 
-                // 我自己的特殊逻辑
-                if(id === socket.id) {
-                    myData = p;
-                    // 相机跟随
-                    camera.position.lerp(new THREE.Vector3(p.x, 100 + p.size*15, p.y + 80), 0.1);
-                    camera.lookAt(p.x, 0, p.y);
-                    
-                    // UI 更新
-                    document.getElementById('mass-val').innerText = Math.floor(p.size * 10);
-                    
-                    // 技能 CD 显示
-                    const now = Date.now();
-                    if (p.dashCD > now) {
-                        const percent = (p.dashCD - now) / 3000 * 100;
-                        document.getElementById('cd-overlay').style.height = percent + '%';
-                    } else {
-                        document.getElementById('cd-overlay').style.height = '0%';
-                    }
+                dx /= len; dy /= len;
+                myState.x += dx * speed;
+                myState.y += dy * speed;
+
+                // 边界限制
+                myState.x = Math.max(-WORLD_SIZE/2, Math.min(WORLD_SIZE/2, myState.x));
+                myState.y = Math.max(-WORLD_SIZE/2, Math.min(WORLD_SIZE/2, myState.y));
+
+                // 告诉服务器我动了 (频率可以很高，因为服务器只负责转发)
+                socket.emit('updatePlayer', { x: myState.x, y: myState.y });
+            }
+
+            // --- 2. 碰撞检测 (本地预判吃东西) ---
+            for (let i in algaeData) {
+                let a = algaeData[i];
+                let dist = Math.hypot(myState.x - a.x, myState.y - a.y);
+                if (dist < myState.size + 1) { // 碰到藻类
+                    // 视觉上立即消失 (不等服务器)
+                    a.x = 99999; 
+                    myState.size += 0.1;
+                    document.getElementById('score-text').innerText = "MASS: " + Math.floor(myState.size*10);
+                    // 告诉服务器我吃了
+                    socket.emit('eat', parseInt(i));
                 }
             }
+
+            // --- 3. 渲染更新 ---
             
-            // 3. 绘制小地图
-            drawMinimap(players, npcs, algaes);
-        });
+            // 更新自己模型
+            if(myState.id) updateEntity(myState.id, myState, true);
 
-        socket.on('dead', () => {
-             document.getElementById('tips').innerHTML = "<span style='color:red; font-size:20px'>你被吞噬了！<br>3秒后重生...</span>";
-             setTimeout(() => location.reload(), 3000);
-        });
+            // 更新藻类 InstancedMesh
+            let idx = 0;
+            for(let i in algaeData) {
+                dummy.position.set(algaeData[i].x, 0, algaeData[i].y);
+                dummy.updateMatrix();
+                algaeMesh.setMatrixAt(idx++, dummy.matrix);
+            }
+            algaeMesh.instanceMatrix.needsUpdate = true;
 
-        // --- 小地图绘制 ---
-        function drawMinimap(players, npcs, algaes) {
-            mapCtx.clearRect(0, 0, 150, 150);
+            // 相机跟随 (带一点延迟感更舒服)
+            camera.position.x += (myState.x - camera.position.x) * 0.1;
+            camera.position.z += (myState.y + 60 + myState.size*10 - camera.position.z) * 0.1;
+            camera.position.y += (100 + myState.size*15 - camera.position.y) * 0.1;
+            camera.lookAt(myState.x, 0, myState.y);
+
+            // 更新 UI CD
+            const cdLeft = Math.max(0, myState.dashCdEnd - Date.now());
+            document.getElementById('skill-cd').style.height = (cdLeft / 3000 * 100) + '%';
+
+            // 绘制小地图
+            drawMinimap();
+
+            composer.render();
+        }
+
+        // --- 小地图 ---
+        const mapCtx = document.getElementById('minimap').getContext('2d');
+        function drawMinimap() {
+            mapCtx.clearRect(0,0,140,140);
+            const map = (v) => (v + WORLD_SIZE/2)/WORLD_SIZE * 140;
             
-            // 辅助函数：世界坐标 -> 地图坐标
-            const map = (val) => (val + WORLD_SIZE/2) / WORLD_SIZE * 150;
-
-            // 画太阳中心
+            // 太阳
             mapCtx.fillStyle = '#ffaa00';
-            mapCtx.beginPath(); mapCtx.arc(75, 75, 3, 0, Math.PI*2); mapCtx.fill();
+            mapCtx.beginPath(); mapCtx.arc(70,70, 4, 0, Math.PI*2); mapCtx.fill();
 
-            // 画自己 (白色箭头)
-            if (myData) {
-                mapCtx.fillStyle = '#ffffff';
-                let mx = map(myData.x), my = map(myData.y);
-                mapCtx.beginPath(); mapCtx.arc(mx, my, 4, 0, Math.PI*2); mapCtx.fill();
-                // 视野圈
-                mapCtx.strokeStyle = 'rgba(255,255,255,0.2)';
-                mapCtx.beginPath(); mapCtx.arc(mx, my, 20, 0, Math.PI*2); mapCtx.stroke();
-            }
+            // 自己
+            mapCtx.fillStyle = '#fff';
+            mapCtx.beginPath(); mapCtx.arc(map(myState.x), map(myState.y), 3, 0, Math.PI*2); mapCtx.fill();
 
-            // 画别人 (红点)
-            for (let id in players) {
-                if (id === socket.id) continue;
-                mapCtx.fillStyle = '#ff0000';
-                mapCtx.beginPath(); mapCtx.arc(map(players[id].x), map(players[id].y), 2, 0, Math.PI*2); mapCtx.fill();
+            // 敌人 (红色)
+            mapCtx.fillStyle = '#f00';
+            for(let id in entities) {
+                if(id !== myState.id) {
+                    mapCtx.beginPath(); mapCtx.arc(map(entities[id].position.x), map(entities[id].position.z), 2, 0, Math.PI*2); mapCtx.fill();
+                }
             }
         }
 
-        // --- 统一输入系统 (WASD + 鼠标) ---
-        const keys = { w:0, a:0, s:0, d:0, space:0 };
-        const mouse = { x: 0, y: 0, active: false };
-        const inputDir = new THREE.Vector3();
-
-        // 键盘监听
-        window.addEventListener('keydown', e => {
-            if(e.key === ' ' || e.code === 'Space') keys.space = 1;
-            if(e.key === 'w' || e.key === 'W') keys.w = 1;
-            if(e.key === 's' || e.key === 'S') keys.s = 1;
-            if(e.key === 'a' || e.key === 'A') keys.a = 1;
-            if(e.key === 'd' || e.key === 'D') keys.d = 1;
-            document.getElementById('tips').style.display = 'none'; // 玩家操作后隐藏提示
-        });
-        window.addEventListener('keyup', e => {
-            if(e.key === ' ' || e.code === 'Space') keys.space = 0;
-            if(e.key === 'w' || e.key === 'W') keys.w = 0;
-            if(e.key === 's' || e.key === 'S') keys.s = 0;
-            if(e.key === 'a' || e.key === 'A') keys.a = 0;
-            if(e.key === 'd' || e.key === 'D') keys.d = 0;
-        });
-
-        // 鼠标监听
-        window.addEventListener('mousedown', () => mouse.active = true);
-        window.addEventListener('mouseup', () => mouse.active = false);
-        window.addEventListener('mousemove', e => {
-            // 将鼠标位置转为世界射线
-            const vec = new THREE.Vector3((e.clientX/window.innerWidth)*2-1, -(e.clientY/window.innerHeight)*2+1, 0.5);
-            vec.unproject(camera).sub(camera.position).normalize();
-            const distance = -camera.position.y / vec.y;
-            const target = camera.position.clone().add(vec.multiplyScalar(distance));
-            
-            if(myData) {
-                mouse.x = target.x - myData.x;
-                mouse.y = target.z - myData.y; // 3D里的Z对应2D里的Y
-            }
-        });
-
-        // 循环发送输入
-        setInterval(() => {
-            let dx = 0, dy = 0;
-            
-            // 1. 键盘优先级
-            if (keys.w) dy -= 1;
-            if (keys.s) dy += 1;
-            if (keys.a) dx -= 1;
-            if (keys.d) dx += 1;
-
-            // 2. 如果没按键盘，且按了鼠标，用鼠标方向
-            if (dx === 0 && dy === 0 && mouse.active) {
-                dx = mouse.x;
-                dy = mouse.y;
-            }
-
-            // 归一化向量
-            inputDir.set(dx, dy, 0).normalize();
-
-            // 发送给服务器
-            socket.emit('input', {
-                dir: { x: inputDir.x, y: inputDir.y },
-                dash: keys.space // 是否按下空格
-            });
-            keys.space = 0; // 重置空格状态 (防止一直触发)
-        }, 1000/30); // 30Hz 采样率
-
-        // 渲染循环
-        function animate() { requestAnimationFrame(animate); composer.render(); }
         animate();
-        window.onresize = () => { camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); composer.setSize(window.innerWidth, window.innerHeight); };
+        
+        // 窗口适配
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
     </script>
 </body>
 </html>
