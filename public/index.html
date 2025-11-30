@@ -1,13 +1,59 @@
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Light Survival</title>
-    <style>body { margin: 0; overflow: hidden; background: #000; touch-action: none; }</style>
+    <title>Solaris Evolution</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #050505; font-family: 'Arial', sans-serif; user-select: none;}
+        
+        /* UI 层 */
+        #hud { position: absolute; width: 100%; height: 100%; pointer-events: none; }
+        
+        /* 左上角信息 */
+        #info { position: absolute; top: 20px; left: 20px; color: #00ffff; text-shadow: 0 0 5px #00ffff; }
+        #info h1 { margin: 0; font-size: 24px; letter-spacing: 2px; }
+        #score { font-size: 18px; color: #ccc; margin-top: 5px; }
+
+        /* 底部技能栏 */
+        #skills { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); display: flex; gap: 20px; }
+        .skill-box { width: 60px; height: 60px; border: 2px solid #333; border-radius: 10px; background: rgba(0,0,0,0.5); position: relative; overflow: hidden; }
+        .skill-key { position: absolute; top: 5px; left: 5px; color: #fff; font-size: 12px; }
+        .skill-icon { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: #00ffff; font-weight: bold; }
+        #cd-overlay { position: absolute; bottom: 0; left: 0; width: 100%; height: 0%; background: rgba(0, 0, 0, 0.8); transition: height 0.1s linear; }
+
+        /* 右下角小地图 */
+        #minimap-container { position: absolute; bottom: 20px; right: 20px; width: 150px; height: 150px; background: rgba(0,0,0,0.3); border: 2px solid #444; border-radius: 50%; overflow: hidden; }
+        #minimap { width: 100%; height: 100%; }
+
+        /* 提示 */
+        #tips { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: rgba(255,255,255,0.5); font-size: 14px; text-align: center; }
+    </style>
 </head>
 <body>
-    <script type="importmap">{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }</script>
+    <div id="hud">
+        <div id="info">
+            <h1>SOLARIS</h1>
+            <div id="score">质量: <span id="mass-val">0</span></div>
+        </div>
+        <div id="skills">
+            <div class="skill-box">
+                <div class="skill-key">SPACE</div>
+                <div class="skill-icon">DASH</div>
+                <div id="cd-overlay"></div>
+            </div>
+        </div>
+        <div id="minimap-container">
+            <canvas id="minimap" width="150" height="150"></canvas>
+        </div>
+        <div id="tips">按 WASD 或 鼠标拖动 移动<br>空格冲刺</div>
+    </div>
+
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }
+    </script>
     <script src="/socket.io/socket.io.js"></script>
+
     <script type="module">
         import * as THREE from 'three';
         import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -15,61 +61,196 @@
         import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 
         const socket = io();
+        
+        // --- 场景设置 ---
         const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 1, 1000);
-        camera.position.set(0, 100, 100); camera.lookAt(0, 0, 0);
+        // 增加背景星空
+        const bgGeo = new THREE.BufferGeometry();
+        const bgCount = 1000;
+        const bgPos = new Float32Array(bgCount * 3);
+        for(let i=0; i<bgCount*3; i++) bgPos[i] = (Math.random()-0.5)*3000;
+        bgGeo.setAttribute('position', new THREE.BufferAttribute(bgPos, 3));
+        scene.add(new THREE.Points(bgGeo, new THREE.PointsMaterial({color: 0x444444, size: 2})));
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 1, 3000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
 
+        // --- 后处理 (更强的光效) ---
         const composer = new EffectComposer(renderer);
         composer.addPass(new RenderPass(scene, camera));
-        composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85));
+        const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 2.0, 0.5, 0.7); // 增强光晕
+        composer.addPass(bloom);
 
-        const sun = new THREE.Mesh(new THREE.SphereGeometry(20, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffaa00 }));
-        scene.add(sun); scene.add(new THREE.PointLight(0xffaa00, 2, 800));
+        // 太阳
+        const sun = new THREE.Mesh(new THREE.SphereGeometry(30, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffaa00 }));
+        scene.add(sun); scene.add(new THREE.PointLight(0xffaa00, 3, 1000));
 
-        const meshes = {}; const algaeMeshes = {};
-        
-        socket.on('state', ({ players, algaes }) => {
+        // --- 游戏逻辑 ---
+        const meshes = {}; 
+        const algaeMeshes = {};
+        const WORLD_SIZE = 2000;
+        let myData = null;
+
+        // 小地图 Canvas
+        const mapCanvas = document.getElementById('minimap');
+        const mapCtx = mapCanvas.getContext('2d');
+
+        socket.on('state', ({ players, algaes, npcs }) => {
+            // 1. 同步藻类
             Object.keys(algaeMeshes).forEach(k => { scene.remove(algaeMeshes[k]); delete algaeMeshes[k]; });
             algaes.forEach(a => {
-                const m = new THREE.Mesh(new THREE.SphereGeometry(0.5), new THREE.MeshBasicMaterial({ color: 0x00ff00 }));
+                const m = new THREE.Mesh(new THREE.SphereGeometry(0.8), new THREE.MeshBasicMaterial({ color: 0x55ff55 }));
                 m.position.set(a.x, 0, a.y); scene.add(m); algaeMeshes[a.id] = m;
             });
-            Object.keys(meshes).forEach(id => { if(!players[id]) { scene.remove(meshes[id]); delete meshes[id]; } });
-            for(let id in players) {
-                let p = players[id], m = meshes[id];
-                if(!m) { m = new THREE.Mesh(new THREE.SphereGeometry(1), new THREE.MeshBasicMaterial({ color: p.color })); scene.add(m); meshes[id] = m; }
+
+            // 2. 同步实体 (玩家 + NPC)
+            const allEntities = { ...players, ...npcs.reduce((acc, n) => ({...acc, [n.id]: n}), {}) };
+
+            // 清理旧的
+            Object.keys(meshes).forEach(id => { if(!allEntities[id]) { scene.remove(meshes[id]); delete meshes[id]; } });
+
+            // 更新/创建
+            for(let id in allEntities) {
+                let p = allEntities[id];
+                let m = meshes[id];
+                
+                if(!m) {
+                    // 玩家是青色，NPC是随机色
+                    m = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), new THREE.MeshBasicMaterial({ color: p.color }));
+                    scene.add(m); meshes[id] = m;
+                }
+                
+                // 平滑插值
                 m.position.lerp(new THREE.Vector3(p.x, 0, p.y), 0.3);
                 m.scale.setScalar(p.size);
+
+                // 我自己的特殊逻辑
                 if(id === socket.id) {
-                    camera.position.lerp(new THREE.Vector3(p.x, 80 + p.size*10, p.y + 60), 0.1);
+                    myData = p;
+                    // 相机跟随
+                    camera.position.lerp(new THREE.Vector3(p.x, 100 + p.size*15, p.y + 80), 0.1);
                     camera.lookAt(p.x, 0, p.y);
+                    
+                    // UI 更新
+                    document.getElementById('mass-val').innerText = Math.floor(p.size * 10);
+                    
+                    // 技能 CD 显示
+                    const now = Date.now();
+                    if (p.dashCD > now) {
+                        const percent = (p.dashCD - now) / 3000 * 100;
+                        document.getElementById('cd-overlay').style.height = percent + '%';
+                    } else {
+                        document.getElementById('cd-overlay').style.height = '0%';
+                    }
                 }
             }
+            
+            // 3. 绘制小地图
+            drawMinimap(players, npcs, algaes);
         });
-        socket.on('dead', () => alert("你挂了！点击确定复活"));
 
-        function sendInput(target) {
-            if(meshes[socket.id]) {
-                const dir = new THREE.Vector3().subVectors(target, meshes[socket.id].position).normalize();
-                socket.emit('input', { x: dir.x, y: dir.z });
+        socket.on('dead', () => {
+             document.getElementById('tips').innerHTML = "<span style='color:red; font-size:20px'>你被吞噬了！<br>3秒后重生...</span>";
+             setTimeout(() => location.reload(), 3000);
+        });
+
+        // --- 小地图绘制 ---
+        function drawMinimap(players, npcs, algaes) {
+            mapCtx.clearRect(0, 0, 150, 150);
+            
+            // 辅助函数：世界坐标 -> 地图坐标
+            const map = (val) => (val + WORLD_SIZE/2) / WORLD_SIZE * 150;
+
+            // 画太阳中心
+            mapCtx.fillStyle = '#ffaa00';
+            mapCtx.beginPath(); mapCtx.arc(75, 75, 3, 0, Math.PI*2); mapCtx.fill();
+
+            // 画自己 (白色箭头)
+            if (myData) {
+                mapCtx.fillStyle = '#ffffff';
+                let mx = map(myData.x), my = map(myData.y);
+                mapCtx.beginPath(); mapCtx.arc(mx, my, 4, 0, Math.PI*2); mapCtx.fill();
+                // 视野圈
+                mapCtx.strokeStyle = 'rgba(255,255,255,0.2)';
+                mapCtx.beginPath(); mapCtx.arc(mx, my, 20, 0, Math.PI*2); mapCtx.stroke();
+            }
+
+            // 画别人 (红点)
+            for (let id in players) {
+                if (id === socket.id) continue;
+                mapCtx.fillStyle = '#ff0000';
+                mapCtx.beginPath(); mapCtx.arc(map(players[id].x), map(players[id].y), 2, 0, Math.PI*2); mapCtx.fill();
             }
         }
 
-        window.addEventListener('mousemove', e => {
-            if('ontouchstart' in window) return;
-            const vec = new THREE.Vector3((e.clientX/window.innerWidth)*2-1, -(e.clientY/window.innerHeight)*2+1, 0.5).unproject(camera).sub(camera.position).normalize();
-            sendInput(camera.position.clone().add(vec.multiplyScalar(-camera.position.y/vec.y)));
-        });
-        window.addEventListener('touchmove', e => {
-            e.preventDefault();
-            const touch = e.touches[0];
-            const vec = new THREE.Vector3((touch.clientX/window.innerWidth)*2-1, -(touch.clientY/window.innerHeight)*2+1, 0.5).unproject(camera).sub(camera.position).normalize();
-            sendInput(camera.position.clone().add(vec.multiplyScalar(-camera.position.y/vec.y)));
-        }, { passive: false });
+        // --- 统一输入系统 (WASD + 鼠标) ---
+        const keys = { w:0, a:0, s:0, d:0, space:0 };
+        const mouse = { x: 0, y: 0, active: false };
+        const inputDir = new THREE.Vector3();
 
+        // 键盘监听
+        window.addEventListener('keydown', e => {
+            if(e.key === ' ' || e.code === 'Space') keys.space = 1;
+            if(e.key === 'w' || e.key === 'W') keys.w = 1;
+            if(e.key === 's' || e.key === 'S') keys.s = 1;
+            if(e.key === 'a' || e.key === 'A') keys.a = 1;
+            if(e.key === 'd' || e.key === 'D') keys.d = 1;
+            document.getElementById('tips').style.display = 'none'; // 玩家操作后隐藏提示
+        });
+        window.addEventListener('keyup', e => {
+            if(e.key === ' ' || e.code === 'Space') keys.space = 0;
+            if(e.key === 'w' || e.key === 'W') keys.w = 0;
+            if(e.key === 's' || e.key === 'S') keys.s = 0;
+            if(e.key === 'a' || e.key === 'A') keys.a = 0;
+            if(e.key === 'd' || e.key === 'D') keys.d = 0;
+        });
+
+        // 鼠标监听
+        window.addEventListener('mousedown', () => mouse.active = true);
+        window.addEventListener('mouseup', () => mouse.active = false);
+        window.addEventListener('mousemove', e => {
+            // 将鼠标位置转为世界射线
+            const vec = new THREE.Vector3((e.clientX/window.innerWidth)*2-1, -(e.clientY/window.innerHeight)*2+1, 0.5);
+            vec.unproject(camera).sub(camera.position).normalize();
+            const distance = -camera.position.y / vec.y;
+            const target = camera.position.clone().add(vec.multiplyScalar(distance));
+            
+            if(myData) {
+                mouse.x = target.x - myData.x;
+                mouse.y = target.z - myData.y; // 3D里的Z对应2D里的Y
+            }
+        });
+
+        // 循环发送输入
+        setInterval(() => {
+            let dx = 0, dy = 0;
+            
+            // 1. 键盘优先级
+            if (keys.w) dy -= 1;
+            if (keys.s) dy += 1;
+            if (keys.a) dx -= 1;
+            if (keys.d) dx += 1;
+
+            // 2. 如果没按键盘，且按了鼠标，用鼠标方向
+            if (dx === 0 && dy === 0 && mouse.active) {
+                dx = mouse.x;
+                dy = mouse.y;
+            }
+
+            // 归一化向量
+            inputDir.set(dx, dy, 0).normalize();
+
+            // 发送给服务器
+            socket.emit('input', {
+                dir: { x: inputDir.x, y: inputDir.y },
+                dash: keys.space // 是否按下空格
+            });
+            keys.space = 0; // 重置空格状态 (防止一直触发)
+        }, 1000/30); // 30Hz 采样率
+
+        // 渲染循环
         function animate() { requestAnimationFrame(animate); composer.render(); }
         animate();
         window.onresize = () => { camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); composer.setSize(window.innerWidth, window.innerHeight); };
